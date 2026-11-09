@@ -48,9 +48,9 @@ exec apache2-foreground\n\
 
 # OpenShift Non-Root Group 0 Permissions
 # OpenShift runs containers with an arbitrary UID that belongs to root group (GID 0)
-RUN chgrp -R 0 /var/www/html /var/log/apache2 /var/run/apache2 /etc/apache2 /var/lib/php/sessions \
-    && chmod -R g=u /var/www/html /var/log/apache2 /var/run/apache2 /etc/apache2 \
-    && mkdir -p /var/lib/php/sessions \
+RUN mkdir -p /var/lib/php/sessions \
+    && chgrp -R 0 /var/www/html /var/log/apache2 /var/run/apache2 /etc/apache2 /var/lib/php/sessions \
+    && chmod -R g=u /var/www/html /var/log/apache2 /var/run/apache2 /etc/apache2 /var/lib/php/sessions \
     && chmod -R 777 /var/lib/php/sessions
 
 EXPOSE 8080
