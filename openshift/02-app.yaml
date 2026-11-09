@@ -1,0 +1,111 @@
+# ==============================================================================
+# OPENSHIFT MANIFEST 2: DOCTOR CONNECT PHP WEB APPLICATION & ROUTE
+# ==============================================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: doctor-connect-app
+  labels:
+    app: doctor-connect
+    component: web
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: doctor-connect
+      component: web
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app: doctor-connect
+        component: web
+    spec:
+      containers:
+        - name: web
+          image: image-registry.openshift-image-registry.svc:5000/doctor-connect-project/doctor-connect:latest
+          # Or your external registry: quay.io/<your-username>/doctor-connect:latest
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: DB_HOST
+              value: "mysql"
+            - name: DB_PORT
+              value: "3306"
+            - name: DB_NAME
+              valueFrom:
+                secretKeyRef:
+                  name: mysql-credentials
+                  key: database-name
+            - name: DB_USER
+              valueFrom:
+                secretKeyRef:
+                  name: mysql-credentials
+                  key: database-user
+            - name: DB_PASS
+              valueFrom:
+                secretKeyRef:
+                  name: mysql-credentials
+                  key: database-password
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "100m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
+          livenessProbe:
+            httpGet:
+              path: /index.php
+              port: 8080
+            initialDelaySeconds: 20
+            periodSeconds: 15
+            timeoutSeconds: 5
+          readinessProbe:
+            httpGet:
+              path: /index.php
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 3
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: doctor-connect-service
+  labels:
+    app: doctor-connect
+    component: web
+spec:
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+  selector:
+    app: doctor-connect
+    component: web
+  type: ClusterIP
+---
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: doctor-connect
+  labels:
+    app: doctor-connect
+    component: web
+spec:
+  to:
+    kind: Service
+    name: doctor-connect-service
+    weight: 100
+  port:
+    targetPort: http
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect

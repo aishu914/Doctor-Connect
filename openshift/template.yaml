@@ -1,0 +1,240 @@
+apiVersion: template.openshift.io/v1
+kind: Template
+metadata:
+  name: doctor-connect-template
+  annotations:
+    description: "DoctorConnect - Token-Based Telehealth Consultation Platform on OpenShift"
+    tags: "php,mysql,telehealth,jitsi,starter"
+    iconClass: "icon-php"
+parameters:
+  - name: APP_NAME
+    displayName: "Application Name"
+    value: "doctor-connect"
+    required: true
+  - name: GIT_URI
+    displayName: "Git Repository URL"
+    description: "URL to the DoctorConnect git repository"
+    value: "https://github.com/aishu914/Doctor-Connect.git"
+    required: true
+  - name: GIT_REF
+    displayName: "Git Reference (Branch/Tag)"
+    value: "main"
+    required: true
+  - name: DB_NAME
+    displayName: "Database Name"
+    value: "doctor_connect"
+    required: true
+  - name: DB_USER
+    displayName: "Database Username"
+    value: "doctor_user"
+    required: true
+  - name: DB_PASSWORD
+    displayName: "Database Password"
+    generate: expression
+    from: "[a-zA-Z0-9]{16}"
+    required: true
+  - name: DB_ROOT_PASSWORD
+    displayName: "Database Root Password"
+    generate: expression
+    from: "[a-zA-Z0-9]{16}"
+    required: true
+objects:
+  # 1. DATABASE SECRET
+  - apiVersion: v1
+    kind: Secret
+    metadata:
+      name: "${APP_NAME}-db-secret"
+    type: Opaque
+    stringData:
+      database-name: "${DB_NAME}"
+      database-user: "${DB_USER}"
+      database-password: "${DB_PASSWORD}"
+      database-root-password: "${DB_ROOT_PASSWORD}"
+
+  # 2. PERSISTENT STORAGE FOR MYSQL
+  - apiVersion: v1
+    kind: PersistentVolumeClaim
+    metadata:
+      name: "${APP_NAME}-mysql-pvc"
+    spec:
+      accessModes:
+        - ReadWriteOnce
+      resources:
+        requests:
+          storage: 5Gi
+
+  # 3. MYSQL DEPLOYMENT
+  - apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      name: "${APP_NAME}-mysql"
+    spec:
+      replicas: 1
+      selector:
+        matchLabels:
+          app: "${APP_NAME}"
+          role: database
+      strategy:
+        type: Recreate
+      template:
+        metadata:
+          labels:
+            app: "${APP_NAME}"
+            role: database
+        spec:
+          containers:
+            - name: mysql
+              image: registry.redhat.io/rhel9/mysql-80:latest
+              env:
+                - name: MYSQL_DATABASE
+                  valueFrom:
+                    secretKeyRef:
+                      name: "${APP_NAME}-db-secret"
+                      key: database-name
+                - name: MYSQL_USER
+                  valueFrom:
+                    secretKeyRef:
+                      name: "${APP_NAME}-db-secret"
+                      key: database-user
+                - name: MYSQL_PASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: "${APP_NAME}-db-secret"
+                      key: database-password
+                - name: MYSQL_ROOT_PASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: "${APP_NAME}-db-secret"
+                      key: database-root-password
+              ports:
+                - containerPort: 3306
+                  name: mysql
+              volumeMounts:
+                - name: mysql-data
+                  mountPath: /var/lib/mysql/data
+              readinessProbe:
+                exec:
+                  command: ["/bin/sh", "-i", "-c", "mysqladmin ping -u $MYSQL_USER -p$MYSQL_PASSWORD"]
+                initialDelaySeconds: 15
+                timeoutSeconds: 5
+          volumes:
+            - name: mysql-data
+              persistentVolumeClaim:
+                claimName: "${APP_NAME}-mysql-pvc"
+
+  # 4. MYSQL SERVICE
+  - apiVersion: v1
+    kind: Service
+    metadata:
+      name: "mysql"
+    spec:
+      ports:
+        - port: 3306
+          targetPort: 3306
+      selector:
+        app: "${APP_NAME}"
+        role: database
+
+  # 5. S2I IMAGE STREAM
+  - apiVersion: image.openshift.io/v1
+    kind: ImageStream
+    metadata:
+      name: "${APP_NAME}"
+
+  # 6. BUILD CONFIGURATION (S2I / DOCKERFILE BUILD)
+  - apiVersion: build.openshift.io/v1
+    kind: BuildConfig
+    metadata:
+      name: "${APP_NAME}"
+    spec:
+      source:
+        type: Git
+        git:
+          uri: "${GIT_URI}"
+          ref: "${GIT_REF}"
+      strategy:
+        type: Docker
+      output:
+        to:
+          kind: ImageStreamTag
+          name: "${APP_NAME}:latest"
+
+  # 7. WEB APP DEPLOYMENT
+  - apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      name: "${APP_NAME}-web"
+    spec:
+      replicas: 1
+      selector:
+        matchLabels:
+          app: "${APP_NAME}"
+          role: frontend
+      template:
+        metadata:
+          labels:
+            app: "${APP_NAME}"
+            role: frontend
+        spec:
+          containers:
+            - name: web
+              image: "${APP_NAME}:latest"
+              imagePullPolicy: Always
+              ports:
+                - containerPort: 8080
+                  name: http
+              env:
+                - name: DB_HOST
+                  value: "mysql"
+                - name: DB_PORT
+                  value: "3306"
+                - name: DB_NAME
+                  valueFrom:
+                    secretKeyRef:
+                      name: "${APP_NAME}-db-secret"
+                      key: database-name
+                - name: DB_USER
+                  valueFrom:
+                    secretKeyRef:
+                      name: "${APP_NAME}-db-secret"
+                      key: database-user
+                - name: DB_PASS
+                  valueFrom:
+                    secretKeyRef:
+                      name: "${APP_NAME}-db-secret"
+                      key: database-password
+              livenessProbe:
+                httpGet:
+                  path: /index.php
+                  port: 8080
+                initialDelaySeconds: 20
+                periodSeconds: 15
+
+  # 8. WEB SERVICE
+  - apiVersion: v1
+    kind: Service
+    metadata:
+      name: "${APP_NAME}-service"
+    spec:
+      ports:
+        - port: 8080
+          targetPort: 8080
+          name: http
+      selector:
+        app: "${APP_NAME}"
+        role: frontend
+
+  # 9. HTTPS ROUTE
+  - apiVersion: route.openshift.io/v1
+    kind: Route
+    metadata:
+      name: "${APP_NAME}"
+    spec:
+      to:
+        kind: Service
+        name: "${APP_NAME}-service"
+      port:
+        targetPort: http
+      tls:
+        termination: edge
+        insecureEdgeTerminationPolicy: Redirect
